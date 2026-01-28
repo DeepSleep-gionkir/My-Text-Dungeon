@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120">
+  <rect width="240" height="120" fill="#0a0a0c" />
+
+  <!-- Bricks (2-row stagger pattern) -->
+  <g stroke="#1b1b1f" stroke-width="3" stroke-linejoin="round">
+    <!-- Row 1 -->
+    <rect x="0" y="0" width="120" height="60" fill="#111116" />
+    <rect x="120" y="0" width="120" height="60" fill="#0f0f14" />
+
+    <!-- Row 2 (offset by half brick width) -->
+    <rect x="-60" y="60" width="120" height="60" fill="#101015" />
+    <rect x="60" y="60" width="120" height="60" fill="#121218" />
+    <rect x="180" y="60" width="120" height="60" fill="#101015" />
+  </g>
+
+  <!-- Subtle surface variation -->
+  <g opacity="0.18">
+    <rect x="0" y="0" width="240" height="120" fill="url(#shade)" />
+  </g>
+
+  <defs>
+    <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.04" />
+      <stop offset="1" stop-color="#000000" stop-opacity="0.0" />
+    </linearGradient>
+  </defs>
+</svg>
+
