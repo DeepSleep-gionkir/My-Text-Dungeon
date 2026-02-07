@@ -11,6 +11,8 @@ import {
   FaSignOutAlt,
   FaCoins,
   FaGem,
+  FaEdit,
+  FaFlask,
 } from "react-icons/fa";
 import AppLogoLink from "@/components/app/AppLogoLink";
 import Link from "next/link";
@@ -52,14 +54,14 @@ export default function LobbyClient({
   return (
     <div className="min-h-screen bg-background text-text-main font-serif flex flex-col">
       {/* Header / GNB */}
-      <header className="h-16 border-b border-gray-800 bg-surface/90 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-6 sticky top-0 z-50">
+      <header className="h-16 border-b border-gray-800 bg-surface/90 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-3 sm:px-6 sticky top-0 z-50">
         <div />
 
         <AppLogoLink className="justify-self-center" />
 
-        <div className="flex items-center justify-end gap-6 text-sm min-w-0">
+        <div className="flex items-center justify-end gap-3 sm:gap-6 text-sm min-w-0">
           {/* Resources */}
-          <div className="flex items-center gap-4 bg-black/50 px-4 py-1 rounded-full border border-gray-800">
+          <div className="hidden sm:flex items-center gap-4 bg-black/50 px-4 py-1 rounded-full border border-gray-800">
             <span className="flex items-center gap-1 text-primary">
               <FaCoins /> {resources?.gold ?? 0}
             </span>
@@ -67,10 +69,16 @@ export default function LobbyClient({
               <FaGem /> {resources?.essence ?? 0}
             </span>
           </div>
+          <div className="sm:hidden flex items-center gap-2 text-xs bg-black/50 px-3 py-1 rounded-full border border-gray-800 text-primary">
+            <FaCoins aria-hidden />
+            <span className="tabular-nums">{resources?.gold ?? 0}</span>
+          </div>
 
           {/* Profile */}
           <div className="flex items-center gap-3">
-            <span className="text-gray-400">{nickname ?? "모험가"}</span>
+            <span className="text-gray-400 max-w-[120px] truncate hidden sm:inline">
+              {nickname ?? "모험가"}
+            </span>
             <button
               onClick={async () => {
                 try {
@@ -93,7 +101,7 @@ export default function LobbyClient({
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 p-6 max-w-7xl mx-auto w-full flex flex-col gap-8">
+      <main className="flex-1 p-3 sm:p-6 max-w-7xl mx-auto w-full flex flex-col gap-8">
         {/* Welcome Section */}
         <section className="text-center py-10 space-y-4">
           <motion.h2
@@ -148,7 +156,7 @@ export default function LobbyClient({
               <div className="text-sm text-gray-600">내가 게시한 던전 목록입니다.</div>
             </div>
             <Link
-              href="/explore"
+              href="/my-dungeons"
               className="text-sm text-gray-400 hover:text-white transition-colors"
             >
               전체 보기
@@ -168,12 +176,11 @@ export default function LobbyClient({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {myDungeons.map((d) => (
-                <Link
+                <div
                   key={d.id}
-                  href={`/play/${d.id}`}
-                  className="group border border-gray-800 bg-surface/60 rounded-lg p-4 hover:border-gray-600 transition-colors"
+                  className="border border-gray-800 bg-surface/60 rounded-lg p-4 hover:border-gray-600 transition-colors"
                 >
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-gray-200 font-bold truncate">{d.name}</div>
                       <div className="mt-1 text-xs text-gray-600">
@@ -181,11 +188,30 @@ export default function LobbyClient({
                         {typeof d.play_count === "number" ? ` · 플레이 ${d.play_count}` : ""}
                       </div>
                     </div>
-                    <div className="text-xs px-2 py-1 rounded border border-primary/30 text-primary bg-primary/5 group-hover:bg-primary/10 transition-colors">
-                      플레이
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href={`/builder?edit=${encodeURIComponent(d.id)}`}
+                        className="text-xs px-3 py-2 rounded border border-gray-800 bg-black/30 text-gray-200 hover:border-gray-600 transition-colors inline-flex items-center gap-2"
+                        title="수정"
+                      >
+                        <FaEdit aria-hidden />
+                        <span className="hidden sm:inline">수정</span>
+                      </Link>
+                      <Link
+                        href={`/play/${encodeURIComponent(d.id)}?test=1`}
+                        prefetch={false}
+                        className="text-xs px-3 py-2 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 transition-colors inline-flex items-center gap-2"
+                        title="테스트(보상 없음)"
+                      >
+                        <FaFlask aria-hidden />
+                        <span className="hidden sm:inline">테스트</span>
+                      </Link>
                     </div>
                   </div>
-                </Link>
+                  <div className="mt-3 text-[11px] text-gray-600">
+                    내 던전은 보상 플레이가 불가하며, 테스트는 보상이 지급되지 않습니다.
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -228,4 +254,3 @@ function DashboardCard({
     </Link>
   );
 }
-

@@ -16,6 +16,7 @@ export default function PublishDungeonModal({
   error,
   name,
   description,
+  mode = "publish",
 }: {
   open: boolean;
   onClose: () => void;
@@ -28,8 +29,12 @@ export default function PublishDungeonModal({
   error: string | null;
   name: string;
   description: string;
+  mode?: "publish" | "update";
 }) {
   const canSubmit = name.trim().length >= 2 && !isPublishing;
+  const title = mode === "update" ? "던전 수정" : "던전 게시";
+  const submitLabel = mode === "update" ? "저장하기" : "게시하기";
+  const submittingLabel = mode === "update" ? "저장 중..." : "게시 중...";
 
   return (
     <AnimatePresence>
@@ -51,7 +56,7 @@ export default function PublishDungeonModal({
             <div className="p-5 border-b border-gray-800 flex items-center justify-between">
               <div className="flex items-center gap-2 text-gray-200 font-serif font-bold">
                 <FaScroll className="text-primary" />
-                <span>던전 게시</span>
+                <span>{title}</span>
               </div>
               <button
                 onClick={onClose}
@@ -114,7 +119,7 @@ export default function PublishDungeonModal({
                 className="sm:ml-auto flex items-center justify-center gap-2 px-4 py-2 bg-primary/20 border border-primary/50 rounded text-primary hover:bg-primary/30 transition-colors disabled:opacity-60"
               >
                 <FaCheck />
-                {isPublishing ? "게시 중..." : "게시하기"}
+                {isPublishing ? submittingLabel : submitLabel}
               </button>
             </div>
           </motion.div>

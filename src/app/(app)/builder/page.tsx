@@ -38,8 +38,9 @@ export default async function BuilderPage() {
         .get();
       initialDeck = snap.docs.map((d) => {
         const raw = d.data() as Record<string, unknown>;
-        const { createdAt, ...rest } = raw as Record<string, unknown>;
-        return { ...(rest as unknown as CardData), _docId: d.id };
+        const sanitized = { ...(raw as Record<string, unknown>) };
+        delete sanitized.createdAt;
+        return { ...(sanitized as unknown as CardData), _docId: d.id };
       });
     } catch (e) {
       console.error(e);

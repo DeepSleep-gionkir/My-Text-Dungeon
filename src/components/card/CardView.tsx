@@ -10,6 +10,10 @@ interface CardViewProps {
   card: CardData;
   className?: string;
   onClick?: () => void;
+  runtime?: {
+    hp?: number;
+    maxHp?: number;
+  };
 }
 
 const getCategoryLabel = (category: string) => {
@@ -53,9 +57,16 @@ export default function CardView({
   card,
   className = "",
   onClick,
+  runtime,
 }: CardViewProps) {
   const isMonster =
     card.category.includes("ENEMY") || card.category.includes("BOSS");
+  const runtimeHp =
+    typeof runtime?.hp === "number" && Number.isFinite(runtime.hp) ? Math.round(runtime.hp) : null;
+  const runtimeMaxHp =
+    typeof runtime?.maxHp === "number" && Number.isFinite(runtime.maxHp)
+      ? Math.round(runtime.maxHp)
+      : null;
 
   return (
     <motion.div
@@ -94,7 +105,12 @@ export default function CardView({
             <span>ATK</span> <span>{card.stats.atk}</span>
           </div>
           <div className="flex justify-between text-green-400">
-            <span>HP</span> <span>{card.stats.hp}</span>
+            <span>HP</span>{" "}
+            <span>
+              {runtimeHp !== null && runtimeMaxHp !== null
+                ? `${runtimeHp}/${runtimeMaxHp}`
+                : card.stats.hp}
+            </span>
           </div>
           <div className="flex justify-between text-blue-400">
             <span>SPD</span> <span>{card.stats.spd}</span>

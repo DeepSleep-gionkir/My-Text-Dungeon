@@ -160,7 +160,7 @@ export default function HeroClient({ initialUser }: { initialUser: UserProfile }
 
   return (
     <div className="min-h-screen bg-background text-text-main font-serif">
-      <header className="h-16 border-b border-gray-800 bg-surface/90 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-6 sticky top-0 z-40">
+      <header className="h-16 border-b border-gray-800 bg-surface/90 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-3 sm:px-6 sticky top-0 z-40">
         <div className="flex items-center gap-2 text-gray-200 font-bold min-w-0">
           <FaUserShield className="text-primary" />
           <span>영웅</span>
@@ -175,7 +175,7 @@ export default function HeroClient({ initialUser }: { initialUser: UserProfile }
         </Link>
       </header>
 
-      <main className="max-w-5xl mx-auto w-full px-6 py-8 grid gap-6 md:grid-cols-2">
+      <main className="max-w-5xl mx-auto w-full px-3 sm:px-6 py-6 sm:py-8 grid gap-6 md:grid-cols-2">
         <section className="md:col-span-2 border border-gray-800 bg-surface/60 rounded-lg p-6">
           <div className="flex items-start justify-between gap-4">
             <div>

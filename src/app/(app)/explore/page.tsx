@@ -2,6 +2,7 @@ import "server-only";
 
 import ExploreClient, { type DungeonListItem } from "@/app/(app)/explore/ExploreClient";
 import { getFirebaseAdmin } from "@/lib/server/firebaseAdmin";
+import { requireUid } from "@/lib/server/session";
 import type { Difficulty } from "@/types/builder";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +22,7 @@ function asNumber(v: unknown, fallback = 0): number {
 }
 
 export default async function ExplorePage() {
+  await requireUid();
   const admin = getFirebaseAdmin();
   if (!admin) {
     return (
@@ -33,6 +35,9 @@ export default async function ExplorePage() {
     );
   }
 
+  let items: DungeonListItem[] = [];
+  let initialError: string | null = null;
+
   try {
     const snap = await admin.db
       .collection("dungeons")
@@ -40,7 +45,7 @@ export default async function ExplorePage() {
       .limit(30)
       .get();
 
-    const items: DungeonListItem[] = snap.docs.map((doc) => {
+    items = snap.docs.map((doc) => {
       const raw = doc.data() as Record<string, unknown>;
       const creatorNickname =
         typeof raw.creator_nickname === "string" ? raw.creator_nickname : undefined;
@@ -50,20 +55,17 @@ export default async function ExplorePage() {
         description: asString(raw.description, ""),
         difficulty: asDifficulty(raw.difficulty),
         room_count: asNumber(raw.room_count, 0),
+        creator_uid: asString(raw.creator_uid, ""),
         creator_nickname: creatorNickname,
         likes: asNumber(raw.likes, 0),
         play_count: asNumber(raw.play_count, 0),
       };
     });
-
-    return <ExploreClient initialItems={items} />;
   } catch (e) {
     console.error(e);
-    return (
-      <ExploreClient
-        initialItems={[]}
-        initialError="던전 목록을 불러오지 못했습니다."
-      />
-    );
+    items = [];
+    initialError = "던전 목록을 불러오지 못했습니다.";
   }
+
+  return <ExploreClient initialItems={items} initialError={initialError} />;
 }

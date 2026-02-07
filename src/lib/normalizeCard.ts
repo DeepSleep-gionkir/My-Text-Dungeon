@@ -13,6 +13,7 @@ import type {
   ShrineOption,
   TradeItem,
 } from "@/types/card";
+import { START_GOLD_BY_DIFFICULTY } from "@/lib/balancing";
 
 const CARD_GRADES: readonly CardGrade[] = [
   "NORMAL",
@@ -41,12 +42,41 @@ const defaultDCByDifficulty: Record<Difficulty, number> = {
   NIGHTMARE: 22,
 };
 
+const dcRangeByDifficulty: Record<Difficulty, { min: number; max: number }> = {
+  EASY: { min: 9, max: 14 },
+  NORMAL: { min: 12, max: 17 },
+  HARD: { min: 15, max: 20 },
+  NIGHTMARE: { min: 18, max: 24 },
+};
+
 const baseStatsByDifficulty: Record<Difficulty, CardStats> = {
   EASY: { hp: 70, atk: 8, def: 2, spd: 10 },
   NORMAL: { hp: 95, atk: 12, def: 4, spd: 11 },
   HARD: { hp: 130, atk: 18, def: 6, spd: 12 },
   NIGHTMARE: { hp: 180, atk: 26, def: 8, spd: 13 },
 };
+
+const triggerAllowSet = new Set<CardAction["trigger"]>([
+  "ON_TURN",
+  "ON_HIT",
+  "HP_BELOW_50",
+  "PASSIVE",
+  "ON_DISARM_SUCCESS",
+  "ON_TURN_START",
+  "ON_ALLY_DEATH",
+]);
+
+const tagPrefixAllowList = [
+  "TAG_",
+  "ATTR_",
+  "STATUS_",
+  "ENV_",
+  "WEAK_",
+  "RESIST_",
+  "IMMUNE_",
+  "LOGIC_",
+  "TARGET_",
+] as const;
 
 const shrinePresetByDifficulty: Record<
   Difficulty,
@@ -231,6 +261,34 @@ function pickDefaultStats(
   };
 }
 
+function capCombatStatsForBalance(
+  stats: CardStats,
+  category: CardCategory,
+  difficulty: Difficulty,
+): CardStats {
+  const base = baseStatsByDifficulty[difficulty];
+  const isBoss = category === "CARD_BOSS";
+  const isSquad = category === "CARD_ENEMY_SQUAD";
+
+  const hpMin = isBoss ? Math.round(base.hp * 2.2) : Math.round(base.hp * 0.65);
+  const hpMax = isBoss
+    ? Math.round(base.hp * 6.5)
+    : isSquad
+      ? Math.round(base.hp * 3.6)
+      : Math.round(base.hp * 2.8);
+  const atkMin = Math.max(1, Math.round(base.atk * (isBoss ? 1.0 : 0.6)));
+  const atkMax = Math.round(base.atk * (isBoss ? 3.3 : isSquad ? 2.2 : 2.5));
+  const defMax = Math.round(base.def * (isBoss ? 3.2 : 2.8)) + 6;
+  const spdMax = base.spd + (isBoss ? 8 : 6);
+
+  return {
+    hp: Math.round(clamp(stats.hp, Math.max(1, hpMin), Math.max(1, hpMax))),
+    atk: Math.round(clamp(stats.atk, atkMin, Math.max(1, atkMax))),
+    def: Math.round(clamp(stats.def, 0, Math.max(0, defMax))),
+    spd: Math.round(clamp(stats.spd, 1, Math.max(1, spdMax))),
+  };
+}
+
 function normalizeStats(v: unknown): CardStats | null {
   if (!isRecord(v)) return null;
   const hp = asNumber(v.hp);
@@ -250,8 +308,12 @@ function normalizeTags(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   const tags = v
     .filter((t): t is string => typeof t === "string")
-    .map((t) => t.trim())
-    .filter(Boolean);
+    .map((t) => t.trim().toUpperCase())
+    .filter(
+      (t) =>
+        t.length > 0 &&
+        tagPrefixAllowList.some((prefix) => t.startsWith(prefix)),
+    );
   return Array.from(new Set(tags)).slice(0, 12);
 }
 
@@ -265,8 +327,10 @@ function normalizeActions(v: unknown): CardAction[] | undefined {
     const type = asString(raw.type);
     if (!msg || !type) continue;
 
-    const triggerRaw = asString(raw.trigger) ?? "PASSIVE";
-    const trigger = triggerRaw as CardAction["trigger"];
+    const triggerRaw = (asString(raw.trigger) ?? "PASSIVE").toUpperCase();
+    const trigger = triggerAllowSet.has(triggerRaw as CardAction["trigger"])
+      ? (triggerRaw as CardAction["trigger"])
+      : "PASSIVE";
     const value = asNumber(raw.value);
     const count = asNumber(raw.count);
     const chance = asNumber(raw.chance);
@@ -276,10 +340,13 @@ function normalizeActions(v: unknown): CardAction[] | undefined {
       trigger,
       type,
       msg,
-      value: value ?? undefined,
+      value:
+        value !== null ? clamp(value, -9999, 9999) : undefined,
       effect: effect ?? undefined,
-      count: count ?? undefined,
-      chance: chance ?? undefined,
+      count:
+        count !== null ? Math.round(clamp(count, 1, 9)) : undefined,
+      chance:
+        chance !== null ? clamp(chance, 0, 1) : undefined,
     });
   }
   return out.length ? out : undefined;
@@ -293,29 +360,68 @@ function normalizeCheckInfo(v: unknown, difficulty: Difficulty): CheckInfo | nul
   const normalized = stat.toUpperCase() as CheckInfo["stat"];
   const allowed: CheckInfo["stat"][] = ["STR", "DEX", "INT", "LUK", "AGI"];
   if (!allowed.includes(normalized)) return null;
+  const range = dcRangeByDifficulty[difficulty];
   return {
     stat: normalized,
-    difficulty: Math.round(clamp(dc ?? defaultDCByDifficulty[difficulty], 5, 30)),
+    difficulty: Math.round(
+      clamp(dc ?? defaultDCByDifficulty[difficulty], range.min, range.max),
+    ),
   };
 }
 
-function normalizeRewards(v: unknown): CardReward | undefined {
+function normalizeRewards(v: unknown, difficulty: Difficulty): CardReward | undefined {
   if (!isRecord(v)) return undefined;
   const out: CardReward = {};
+  const starterGold = START_GOLD_BY_DIFFICULTY[difficulty];
+  const maxGold = Math.max(200, Math.round(starterGold * 4.8));
 
   const gold = v.gold;
-  if (typeof gold === "number" && Number.isFinite(gold)) out.gold = gold;
+  if (typeof gold === "number" && Number.isFinite(gold)) {
+    out.gold = Math.round(clamp(gold, 0, maxGold));
+  }
   if (isRecord(gold)) {
     const min = asNumber(gold.min);
     const max = asNumber(gold.max);
-    if (min !== null && max !== null) out.gold = { min, max };
+    if (min !== null && max !== null) {
+      const nMin = Math.round(clamp(Math.min(min, max), 0, maxGold));
+      const nMax = Math.round(clamp(Math.max(min, max), nMin, maxGold));
+      out.gold = { min: nMin, max: nMax };
+    }
   }
 
   const items = v.items;
-  if (Array.isArray(items)) out.items = items as CardReward["items"];
+  if (Array.isArray(items)) {
+    const stringIds: string[] = [];
+    const objectItems: Array<{ id: string; rate: number; name: string }> = [];
+    for (const raw of items.slice(0, 6)) {
+      if (typeof raw === "string") {
+        const id = raw.trim().toUpperCase();
+        if (id.startsWith("ITEM_")) stringIds.push(id);
+        continue;
+      }
+      if (!isRecord(raw)) continue;
+      const id = asString(raw.id)?.trim().toUpperCase();
+      if (!id || !id.startsWith("ITEM_")) continue;
+      const rate = clamp(asNumber(raw.rate) ?? 1, 0, 1);
+      const name = asString(raw.name)?.trim() || id;
+      objectItems.push({ id, rate, name });
+    }
+    if (objectItems.length > 0) {
+      for (const id of stringIds) {
+        objectItems.push({ id, rate: 1, name: id });
+      }
+      const dedup = new Map<string, { id: string; rate: number; name: string }>();
+      for (const item of objectItems) {
+        if (!dedup.has(item.id)) dedup.set(item.id, item);
+      }
+      if (dedup.size > 0) out.items = Array.from(dedup.values());
+    } else if (stringIds.length > 0) {
+      out.items = Array.from(new Set(stringIds));
+    }
+  }
 
   const xp = asNumber(v.xp);
-  if (xp !== null) out.xp = xp;
+  if (xp !== null) out.xp = Math.round(clamp(xp, 0, 360));
 
   return Object.keys(out).length ? out : undefined;
 }
@@ -364,15 +470,23 @@ function ensureShrineOptions(
   return [...fromAI, ...fill].slice(0, 5);
 }
 
-function normalizeTradeList(v: unknown): TradeItem[] | undefined {
+function normalizeTradeList(
+  v: unknown,
+  difficulty: Difficulty,
+): TradeItem[] | undefined {
   if (!Array.isArray(v)) return undefined;
   const out: TradeItem[] = [];
+  const starterGold = START_GOLD_BY_DIFFICULTY[difficulty];
+  const maxPrice = Math.max(starterGold * 5, 250);
   for (const raw of v) {
     if (!isRecord(raw)) continue;
     const id = asString(raw.id);
     const price = asNumber(raw.price);
     if (!id || price === null) continue;
-    out.push({ id, price: Math.round(clamp(price, 0, 999999)) });
+    out.push({
+      id: id.trim().toUpperCase(),
+      price: Math.round(clamp(price, 0, maxPrice)),
+    });
   }
   return out.length ? out : undefined;
 }
@@ -381,9 +495,14 @@ function ensureTradeList(
   list: TradeItem[] | undefined,
   difficulty: Difficulty,
 ): TradeItem[] {
+  const starterGold = START_GOLD_BY_DIFFICULTY[difficulty];
   const base = traderPresetByDifficulty[difficulty];
   const fromAI = (list ?? []).slice(0, 6);
-  if (fromAI.length >= 3) return fromAI;
+  if (fromAI.length >= 3) {
+    if (fromAI.some((it) => it.price <= starterGold)) return fromAI;
+    // Ensure at least one affordable entry for first-run usability.
+    return [{ ...base[0] }, ...fromAI.slice(1)];
+  }
 
   const usedIds = new Set(fromAI.map((it) => it.id));
   const fill = base.filter((it) => !usedIds.has(it.id));
@@ -454,9 +573,9 @@ export function normalizeCardData(
   const statsFromAI = normalizeStats(raw.stats);
   const actions = normalizeActions(raw.actions);
   const check_info = normalizeCheckInfo(raw.check_info, difficulty);
-  const rewards = normalizeRewards(raw.rewards);
+  const rewards = normalizeRewards(raw.rewards, difficulty);
   const options = normalizeShrineOptions(raw.options);
-  const trade_list = normalizeTradeList(raw.trade_list);
+  const trade_list = normalizeTradeList(raw.trade_list, difficulty);
   const dialogue = normalizeDialogue(raw.dialogue);
   const quest = normalizeQuest(raw.quest);
   const mimic_data = normalizeMimic(raw.mimic_data);
@@ -475,6 +594,10 @@ export function normalizeCardData(
 
   const normalizedStats =
     needsStats && !statsFromAI ? pickDefaultStats(forcedCategory, grade, difficulty) : statsFromAI ?? undefined;
+  const balancedStats =
+    normalizedStats && needsStats
+      ? capCombatStatsForBalance(normalizedStats, forcedCategory, difficulty)
+      : normalizedStats;
 
   const fallbackCheck: CheckInfo = {
     stat: "DEX",
@@ -500,7 +623,7 @@ export function normalizeCardData(
     description,
     grade,
     tags,
-    stats: normalizedStats,
+    stats: balancedStats,
     check_info: normalizedCheck,
     actions: normalizedActions,
     rewards,

@@ -1,10 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import AppLogoLink from "@/components/app/AppLogoLink";
 import type { Difficulty } from "@/types/builder";
-import { FaArrowRight, FaChevronLeft, FaHammer, FaSearch } from "react-icons/fa";
+import type { UserProfile } from "@/types/user";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { useRouter } from "next/navigation";
+import { useUserStore } from "@/store/useUserStore";
+import {
+  FaChevronLeft,
+  FaEdit,
+  FaFlask,
+  FaHammer,
+  FaSearch,
+  FaSignOutAlt,
+} from "react-icons/fa";
 import type { IconType } from "react-icons";
 import {
   GiCastleRuins,
@@ -13,15 +26,13 @@ import {
   GiScrollUnfurled,
   GiWoodenDoor,
 } from "react-icons/gi";
-import { motion } from "framer-motion";
 
-export type DungeonListItem = {
+export type MyDungeonListItem = {
   id: string;
   name: string;
   description: string;
   difficulty: Difficulty;
   room_count: number;
-  creator_nickname?: string;
   likes?: number;
   play_count?: number;
 };
@@ -79,30 +90,45 @@ function difficultyVisual(d: Difficulty): {
   };
 }
 
-export default function ExploreClient({
+export default function MyDungeonsClient({
+  initialUser,
   initialItems,
   initialError = null,
 }: {
-  initialItems: DungeonListItem[];
+  initialUser: UserProfile;
+  initialItems: MyDungeonListItem[];
   initialError?: string | null;
 }) {
   type DifficultyFilter = Difficulty | "ALL";
 
-  const [items] = useState<DungeonListItem[]>(initialItems);
+  const router = useRouter();
+  const [items] = useState<MyDungeonListItem[]>(initialItems);
   const [error] = useState<string | null>(initialError);
   const [q, setQ] = useState("");
   const [difficultyFilter, setDifficultyFilter] = useState<DifficultyFilter>("ALL");
 
+  const storeUid = useUserStore((s) => s.uid);
+  const storeAuthed = useUserStore((s) => s.isAuthenticated);
+  const storeNickname = useUserStore((s) => s.nickname);
+
+  const nickname =
+    storeAuthed && storeUid ? (storeNickname ?? initialUser.nickname) : initialUser.nickname;
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
+    if (!needle) return items;
     return items.filter((d) => {
-      const byDifficulty = difficultyFilter === "ALL" || d.difficulty === difficultyFilter;
-      if (!byDifficulty) return false;
-      if (!needle) return true;
-      const hay = `${d.name} ${d.description ?? ""} ${d.creator_nickname ?? ""}`.toLowerCase();
+      if (difficultyFilter !== "ALL" && d.difficulty !== difficultyFilter) return false;
+      const hay = `${d.name} ${d.description ?? ""}`.toLowerCase();
       return hay.includes(needle);
     });
   }, [difficultyFilter, items, q]);
+
+  const visible = useMemo(() => {
+    if (q.trim()) return filtered;
+    if (difficultyFilter === "ALL") return items;
+    return items.filter((d) => d.difficulty === difficultyFilter);
+  }, [difficultyFilter, filtered, items, q]);
 
   return (
     <div className="min-h-screen bg-background text-text-main font-serif">
@@ -116,29 +142,47 @@ export default function ExploreClient({
             <FaChevronLeft aria-hidden />
           </Link>
           <GiScrollUnfurled className="text-primary" />
-          <span className="hidden sm:inline">던전 의뢰 게시판</span>
-          <span className="sm:hidden">탐험</span>
+          <span className="hidden sm:inline">내 던전</span>
+          <span className="sm:hidden">내 던전</span>
         </div>
 
         <AppLogoLink className="justify-self-center" />
 
-        <div className="flex items-center justify-end">
+        <div className="flex items-center justify-end gap-2">
           <Link
             href="/builder"
-            aria-label="제작하러 가기"
+            aria-label="새 던전 제작"
             className="text-sm px-3 py-2 bg-primary/10 border border-primary/40 rounded text-primary hover:bg-primary/20 transition-colors inline-flex items-center gap-2"
           >
             <FaHammer aria-hidden />
-            <span className="hidden sm:inline">제작하러 가기</span>
+            <span className="hidden sm:inline">새 던전</span>
           </Link>
+          <button
+            onClick={async () => {
+              try {
+                await signOut(auth);
+                await fetch("/api/logout", { method: "POST" }).catch(() => {});
+              } catch (e) {
+                console.error(e);
+              } finally {
+                useUserStore.getState().logout();
+              }
+              router.push("/login");
+            }}
+            className="p-2 rounded border border-gray-800 text-gray-400 hover:text-red-300 hover:border-gray-600 transition-colors"
+            title={`${nickname ?? "모험가"} 로그아웃`}
+            aria-label="로그아웃"
+          >
+            <FaSignOutAlt aria-hidden />
+          </button>
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto w-full px-3 sm:px-6 py-6 sm:py-8 space-y-6">
         <div className="flex flex-col gap-3">
           <div className="text-gray-400">
-            최신 던전{" "}
-            <span className="text-gray-200 font-bold">{filtered.length}</span>개
+            내 던전{" "}
+            <span className="text-gray-200 font-bold">{visible.length}</span>개
           </div>
           <div className="flex flex-col md:flex-row md:items-center gap-3 justify-between">
             <div className="relative w-full md:w-[360px]">
@@ -146,7 +190,7 @@ export default function ExploreClient({
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="이름/설명/작성자 검색"
+                placeholder="이름/설명 검색"
                 className="w-full input-surface py-3 pl-10 pr-3 text-gray-200"
               />
             </div>
@@ -183,13 +227,13 @@ export default function ExploreClient({
           </div>
         )}
 
-        {filtered.length === 0 ? (
+        {visible.length === 0 ? (
           <div className="panel-surface rounded-lg p-8 text-center text-gray-500">
-            표시할 던전이 없습니다.
+            아직 게시한 던전이 없습니다. 제작 탭에서 던전을 만들어 보세요.
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {filtered.map((d) => {
+            {visible.map((d) => {
               const diff = difficultyVisual(d.difficulty);
               const Icon = diff.Icon;
               return (
@@ -199,9 +243,7 @@ export default function ExploreClient({
                   animate={{ opacity: 1, y: 0 }}
                   className="group"
                 >
-                  <Link
-                    href={`/play/${d.id}`}
-                    prefetch={false}
+                  <div
                     className={`block relative aspect-square panel-surface panel-surface-hover p-3 sm:p-4 overflow-hidden ${diff.frameCls}`}
                   >
                     <div className="absolute inset-0 bg-noise opacity-10 pointer-events-none" />
@@ -227,24 +269,37 @@ export default function ExploreClient({
 
                       <div className="mt-3 min-w-0">
                         <div className="text-gray-200 font-bold truncate">{d.name}</div>
-                        <div className="mt-1 text-xs text-gray-600 truncate">
-                          {d.creator_nickname ?? "알 수 없음"}
-                        </div>
                         <div className="mt-2 text-[11px] text-gray-600 line-clamp-2">
                           {d.description || "설명이 없습니다."}
                         </div>
                       </div>
 
-                      <div className="mt-auto pt-3 flex items-center justify-between text-[11px] text-gray-600 pr-8">
+                      <div className="mt-auto pt-3 flex items-center justify-between text-[11px] text-gray-600">
                         <span>플레이 {d.play_count ?? 0}</span>
                         <span>좋아요 {d.likes ?? 0}</span>
                       </div>
-                    </div>
 
-                    <div className="absolute right-3 bottom-3 text-primary opacity-0 group-hover:opacity-100 transition-opacity">
-                      <FaArrowRight aria-hidden />
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        <Link
+                          href={`/builder?edit=${encodeURIComponent(d.id)}`}
+                          className="px-3 py-2 rounded border border-gray-800 bg-black/30 text-gray-200 hover:border-gray-600 transition-colors inline-flex items-center justify-center gap-2 text-xs"
+                          title="수정"
+                        >
+                          <FaEdit aria-hidden />
+                          <span>수정</span>
+                        </Link>
+                        <Link
+                          href={`/play/${encodeURIComponent(d.id)}?test=1`}
+                          prefetch={false}
+                          className="px-3 py-2 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 transition-colors inline-flex items-center justify-center gap-2 text-xs"
+                          title="테스트(보상 없음)"
+                        >
+                          <FaFlask aria-hidden />
+                          <span>테스트</span>
+                        </Link>
+                      </div>
                     </div>
-                  </Link>
+                  </div>
                 </motion.div>
               );
             })}

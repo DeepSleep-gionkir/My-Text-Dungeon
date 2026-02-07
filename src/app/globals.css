@@ -4,11 +4,13 @@
 @theme {
   --color-background: #0a0a0c;
   --color-surface: #121212;
+  --color-surface-elev: #17171b;
   --color-primary: #ffd700;
   --color-secondary: #5b21b6;
   --color-accent: #991b1b;
   --color-text-main: #f5f5f5;
   --color-text-muted: #a3a3a3;
+  --color-border-soft: rgba(255, 255, 255, 0.08);
 
   --font-display: "Cinzel", serif;
   --font-serif: "Noto Serif KR", serif;
@@ -31,6 +33,11 @@ body {
     )
     rgb(var(--background-start-rgb));
   min-height: 100vh;
+  min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
   overflow-x: hidden;
 }
 
@@ -147,6 +154,73 @@ body {
 
   .slot-hint {
     animation: slot-hint 1.45s ease-in-out infinite;
+  }
+
+  .panel-surface {
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.04) 0%,
+      rgba(255, 255, 255, 0.01) 24%,
+      rgba(0, 0, 0, 0.2) 100%
+    );
+    background-color: var(--color-surface-elev);
+    border: 1px solid var(--color-border-soft);
+    border-radius: 0.75rem;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28);
+  }
+
+  .panel-surface-hover {
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  }
+  .panel-surface-hover:hover {
+    border-color: rgba(255, 215, 0, 0.28);
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 215, 0, 0.08);
+    transform: translateY(-1px);
+  }
+
+  .input-surface {
+    background-color: rgba(10, 10, 12, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 0.5rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .input-surface:focus-visible {
+    outline: none;
+    border-color: rgba(255, 215, 0, 0.65);
+    box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.14);
+  }
+}
+
+@media (pointer: coarse) {
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    min-height: 40px;
+  }
+
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 360px) {
+  html {
+    font-size: 15px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

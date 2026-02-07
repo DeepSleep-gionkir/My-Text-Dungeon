@@ -5,7 +5,7 @@ import {
   GiDragonHead,
   GiBossKey,
   GiTrapMask,
-  GiHolySymbol,
+  GiCrystalShrine,
   GiChest,
   GiConversation,
   GiCampfire,
@@ -48,7 +48,7 @@ const categories: {
       { id: "ROOM", label: "환경형" },
     ],
   },
-  { id: "SHRINE", label: "제단", icon: <GiHolySymbol /> },
+  { id: "SHRINE", label: "제단", icon: <GiCrystalShrine /> },
   { id: "TREASURE", label: "보물", icon: <GiChest /> },
   {
     id: "NPC",

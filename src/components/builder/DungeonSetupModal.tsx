@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { FaCheck, FaChevronLeft, FaCog, FaTimes } from "react-icons/fa";
 import type { Difficulty } from "@/types/builder";
-import { ROOM_COUNT_BY_DIFFICULTY } from "@/lib/balancing";
+import { DIFFICULTY_SETUP_HINT, ROOM_COUNT_BY_DIFFICULTY } from "@/lib/balancing";
 
 export type DungeonSetup = {
   name: string;
@@ -15,12 +15,12 @@ export type DungeonSetup = {
 
 const difficultyInfo: Record<
   Difficulty,
-  { label: string; desc: string; border: string }
+  { label: string; border: string }
 > = {
-  EASY: { label: "쉬움", desc: "스탯 0.8배, 보상 0.8배", border: "border-green-700 text-green-300" },
-  NORMAL: { label: "보통", desc: "표준 밸런스", border: "border-gray-700 text-gray-200" },
-  HARD: { label: "어려움", desc: "스탯 1.3배, 보상 1.5배", border: "border-orange-700 text-orange-300" },
-  NIGHTMARE: { label: "악몽", desc: "스탯 1.8배, 보상 2.5배", border: "border-red-900 text-red-300" },
+  EASY: { label: "쉬움", border: "border-green-700 text-green-300" },
+  NORMAL: { label: "보통", border: "border-gray-700 text-gray-200" },
+  HARD: { label: "어려움", border: "border-orange-700 text-orange-300" },
+  NIGHTMARE: { label: "악몽", border: "border-red-900 text-red-300" },
 };
 
 export default function DungeonSetupModal({
@@ -40,13 +40,6 @@ export default function DungeonSetupModal({
   const [description, setDescription] = useState(initial.description);
   const [difficulty, setDifficulty] = useState<Difficulty>(initial.difficulty);
   const roomCount = ROOM_COUNT_BY_DIFFICULTY[difficulty];
-
-  useEffect(() => {
-    if (!open) return;
-    setName(initial.name);
-    setDescription(initial.description);
-    setDifficulty(initial.difficulty);
-  }, [open, initial]);
 
   const canConfirm = name.trim().length >= 2;
   const subtitle = useMemo(() => {
@@ -98,7 +91,7 @@ export default function DungeonSetupModal({
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="예: 검은 서리의 회랑"
-                    className="w-full bg-gray-900 border border-gray-700 rounded-md py-3 px-3 text-gray-200 focus:outline-none focus:border-primary transition-colors"
+                    className="w-full input-surface py-3 px-3 text-gray-200"
                     autoFocus
                   />
                   <div className="text-xs text-gray-600">
@@ -137,7 +130,7 @@ export default function DungeonSetupModal({
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="예: 얼어붙은 폐허를 지나 최심부의 보스를 처치하세요."
-                  className="w-full bg-gray-900 border border-gray-700 rounded-md py-3 px-3 text-gray-200 focus:outline-none focus:border-primary transition-colors min-h-[110px]"
+                  className="w-full input-surface py-3 px-3 text-gray-200 min-h-[110px]"
                 />
               </div>
 
@@ -161,7 +154,7 @@ export default function DungeonSetupModal({
                   ))}
                 </div>
                 <div className="text-xs text-gray-600 italic">
-                  {difficultyInfo[difficulty].desc}
+                  {DIFFICULTY_SETUP_HINT[difficulty]}
                 </div>
               </div>
             </div>

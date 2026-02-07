@@ -291,7 +291,10 @@ export default function ChatInterface({
                   : "카드 컨셉을 입력하세요 (예: 얼음 송곳니 늑대)"
             }
             disabled={!geminiApiKey || !isCategoryReady}
-            className="w-full bg-gray-900 border border-gray-700 rounded-md py-3 pl-4 pr-12 text-gray-200 focus:outline-none focus:border-primary transition-colors"
+            className="w-full input-surface py-3 pl-4 pr-12 text-gray-200"
+            aria-label="카드 컨셉 입력"
+            autoComplete="off"
+            maxLength={240}
           />
           <button
             onClick={handleSend}

@@ -11,7 +11,6 @@ type AdminContext = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
   var __firebaseAdmin: AdminContext | undefined;
 }
 
@@ -50,4 +49,3 @@ export function getFirebaseAdmin(): AdminContext | null {
   globalThis.__firebaseAdmin = ctx;
   return ctx;
 }
-

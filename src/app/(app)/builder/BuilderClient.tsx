@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import ChatInterface from "@/components/builder/ChatInterface";
 import AppLogoLink from "@/components/app/AppLogoLink";
 import CategorySelector from "@/components/builder/CategorySelector";
@@ -11,19 +11,26 @@ import PublishDungeonModal from "@/components/builder/PublishDungeonModal";
 import DungeonSetupModal, {
   type DungeonSetup,
 } from "@/components/builder/DungeonSetupModal";
-import { CardData } from "@/types/card";
+import type { CardData } from "@/types/card";
 import { FaChevronLeft, FaCodeBranch, FaCog, FaInfoCircle, FaSave, FaTimes, FaTrash } from "react-icons/fa";
 import type { Difficulty, PrimaryCategory } from "@/types/builder";
 import { useUserStore } from "@/store/useUserStore";
 import type { UserProfile } from "@/types/user";
 import { ROOM_COUNT_BY_DIFFICULTY } from "@/lib/balancing";
+import {
+  analyzeDungeonForBuilder,
+  type AnalysisSeverity,
+  type DungeonEmpiricalInput,
+} from "@/lib/dungeonAnalyzer";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   addDoc,
   collection,
   deleteDoc,
   doc,
+  getDoc,
   serverTimestamp,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { pruneUndefined } from "@/lib/pruneUndefined";
@@ -36,6 +43,7 @@ type Step =
   | { kind: "SINGLE"; slots: [StepSlot] }
   | { kind: "FORK"; slots: [StepSlot, StepSlot] };
 type StepSlotRef = { stepIndex: number; slotIndex: 0 | 1 };
+type StoredCardLike = CardData & Partial<{ _docId: string; createdAt: unknown }>;
 
 const STEP_LAYOUT_TRANSITION = {
   type: "spring" as const,
@@ -43,6 +51,54 @@ const STEP_LAYOUT_TRANSITION = {
   damping: 38,
   mass: 0.8,
 };
+
+const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+
+function severityTone(severity: AnalysisSeverity): string {
+  if (severity === "ERROR") return "text-red-300 border-red-900 bg-red-900/10";
+  if (severity === "WARN") return "text-yellow-200 border-yellow-900/50 bg-yellow-900/10";
+  return "text-emerald-300 border-emerald-900/40 bg-emerald-900/10";
+}
+
+function severityBadge(severity: AnalysisSeverity): string {
+  if (severity === "ERROR") return "오류";
+  if (severity === "WARN") return "주의";
+  return "정보";
+}
+
+function heatClass(risk: number): { text: string; bar: string; label: string } {
+  if (risk >= 82) return { text: "text-red-300", bar: "bg-red-500/80", label: "치명" };
+  if (risk >= 64) return { text: "text-orange-300", bar: "bg-orange-500/80", label: "고위험" };
+  if (risk >= 44) return { text: "text-yellow-200", bar: "bg-yellow-500/80", label: "주의" };
+  return { text: "text-emerald-300", bar: "bg-emerald-500/80", label: "안정" };
+}
+
+function asNonNegativeNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+  return value as Record<string, unknown>;
+}
+
+function asCardData(value: unknown): CardData | null {
+  return asRecord(value) ? (value as CardData) : null;
+}
+
+function cardDocId(card: CardData | null): string | null {
+  if (!card) return null;
+  const maybe = card as StoredCardLike;
+  return typeof maybe._docId === "string" ? maybe._docId : null;
+}
+
+function stripCardClientMeta(card: CardData): CardData {
+  const sanitized = { ...(card as unknown as Record<string, unknown>) };
+  delete sanitized._docId;
+  delete sanitized.createdAt;
+  return sanitized as unknown as CardData;
+}
 
 function CardMiniTile({
   card,
@@ -117,8 +173,16 @@ export default function BuilderClient({
 
   const defaultDifficulty: Difficulty = "NORMAL";
 
-  const [setupOpen, setSetupOpen] = useState(true);
-  const [setupMode, setSetupMode] = useState<"start" | "edit">("start");
+  const searchParams = useSearchParams();
+  const editId = searchParams.get("edit");
+  const [editingDungeonId, setEditingDungeonId] = useState<string | null>(null);
+  const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+
+  const [setupOpen, setSetupOpen] = useState(() => !editId);
+  const [setupMode, setSetupMode] = useState<"start" | "edit">(() =>
+    editId ? "edit" : "start",
+  );
   const [dungeonName, setDungeonName] = useState("");
   const [dungeonDescription, setDungeonDescription] = useState("");
   const [difficulty, setDifficulty] = useState<Difficulty>(defaultDifficulty);
@@ -151,6 +215,7 @@ export default function BuilderClient({
   // Steps: run length is fixed (roomCount). Each step is SINGLE(1 room) or FORK(2 rooms).
   const [steps, setSteps] = useState<Step[]>(() => makeDefaultSteps(roomCount));
   const [forkEditOn, setForkEditOn] = useState(false);
+  const [empiricalBalance, setEmpiricalBalance] = useState<DungeonEmpiricalInput | null>(null);
 
   // Category selection state
   const [selectedCategory, setSelectedCategory] =
@@ -167,7 +232,7 @@ export default function BuilderClient({
 
   // Drag state
   const [draggedCard, setDraggedCard] = useState<CardData | null>(null);
-  const [selectedForPlacement, setSelectedForPlacement] = useState<CardData | null>(
+  const [selectedForPlacement, setSelectedForPlacement] = useState<StoredCard | null>(
     null,
   );
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
@@ -178,6 +243,100 @@ export default function BuilderClient({
   const DRAG_MIME = "application/x-text-dungeon-card";
 
   // 덱은 서버에서 프리패치하고, 생성/삭제는 로컬 state로 즉시 반영합니다.
+
+  const sanitizeDifficulty = (v: unknown): Difficulty => {
+    const s = typeof v === "string" ? v.toUpperCase() : "";
+    if (s === "EASY" || s === "NORMAL" || s === "HARD" || s === "NIGHTMARE") return s;
+    return defaultDifficulty;
+  };
+
+  // Load an existing dungeon for editing via ?edit={dungeonId}
+  useEffect(() => {
+    if (!editId) return;
+    if (!uid) return;
+    if (editingDungeonId === editId) return;
+
+    let cancelled = false;
+    setEditLoading(true);
+    setEditLoadError(null);
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "dungeons", editId));
+        if (!snap.exists()) {
+          throw new Error("던전을 찾을 수 없습니다.");
+        }
+        const raw = snap.data() as Record<string, unknown>;
+        const creatorUid = typeof raw.creator_uid === "string" ? raw.creator_uid : "";
+        if (!creatorUid || creatorUid !== uid) {
+          throw new Error("이 던전을 수정할 권한이 없습니다.");
+        }
+
+        const name = typeof raw.name === "string" ? raw.name : "";
+        const description = typeof raw.description === "string" ? raw.description : "";
+        const diff = sanitizeDifficulty(raw.difficulty);
+        const rc =
+          typeof raw.room_count === "number" && Number.isFinite(raw.room_count)
+            ? Math.max(1, Math.round(raw.room_count))
+            : ROOM_COUNT_BY_DIFFICULTY[diff];
+
+        const stepsRaw = Array.isArray(raw.room_steps_v2) ? raw.room_steps_v2 : [];
+        const loadedSteps: Step[] = [];
+        for (const s of stepsRaw) {
+          const row = asRecord(s);
+          if (!row) continue;
+          const rooms = Array.isArray(row.rooms) ? row.rooms : [];
+          const room0 = asCardData(rooms[0] ?? null);
+          const room1 = asCardData(rooms[1] ?? null);
+          if (room0 && room1) loadedSteps.push({ kind: "FORK", slots: [room0, room1] });
+          else loadedSteps.push({ kind: "SINGLE", slots: [room0] });
+        }
+
+        const finalSteps = loadedSteps.length > 0 ? loadedSteps : makeDefaultSteps(rc);
+        const finalRoomCount = finalSteps.length > 0 ? finalSteps.length : rc;
+        const loadedEmpirical: DungeonEmpiricalInput = {
+          runs: asNonNegativeNumber(raw.balance_runs),
+          clears: asNonNegativeNumber(raw.balance_clear_count),
+          fails: asNonNegativeNumber(raw.balance_fail_count),
+          totalProgressRate: asNonNegativeNumber(raw.balance_total_progress_rate),
+          totalDurationSec: asNonNegativeNumber(raw.balance_total_duration_sec),
+          totalTurns: asNonNegativeNumber(raw.balance_total_turns),
+          totalDamageDealt: asNonNegativeNumber(raw.balance_total_damage_dealt),
+          totalDamageTaken: asNonNegativeNumber(raw.balance_total_damage_taken),
+          totalCombats: asNonNegativeNumber(raw.balance_total_combats),
+          totalCombatWins: asNonNegativeNumber(raw.balance_total_combat_wins),
+        };
+
+        if (cancelled) return;
+        setEditingDungeonId(editId);
+        setDungeonName(name);
+        setDungeonDescription(description);
+        setDifficulty(diff);
+        setRoomCount(finalRoomCount);
+        setSteps(finalSteps);
+        setForkEditOn(false);
+        setSelectedCategory(null);
+        setSelectedSubCategory(null);
+        setDraggedCard(null);
+        setSelectedForPlacement(null);
+        setEmpiricalBalance(loadedEmpirical.runs > 0 ? loadedEmpirical : null);
+        setPublishError(null);
+        setSetupMode("edit");
+        setSetupOpen(false);
+        setMobileView("LAYOUT");
+      } catch (e: unknown) {
+        console.error(e);
+        if (!cancelled) setEditLoadError((e as Error)?.message ?? "던전을 불러오지 못했습니다.");
+      } finally {
+        if (!cancelled) setEditLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId, uid]);
 
   const applySetup = (next: DungeonSetup) => {
     setDungeonName(next.name);
@@ -193,6 +352,7 @@ export default function BuilderClient({
     setPublishError(null);
     setSetupOpen(false);
     setSetupMode("edit");
+    if (!editingDungeonId) setEmpiricalBalance(null);
   };
 
   const handleCategorySelect = (
@@ -326,11 +486,11 @@ export default function BuilderClient({
       await deleteDoc(doc(db, "users", uid, "cards", card._docId));
       setDeck((prev) => prev.filter((c) => c._docId !== card._docId));
       setSelectedForPlacement((cur) => {
-        const curId = (cur as any)?._docId as string | undefined;
+        const curId = cur?._docId;
         return curId && curId === card._docId ? null : cur;
       });
       setDetailCard((cur) => {
-        const curId = (cur as any)?._docId as string | undefined;
+        const curId = cardDocId(cur);
         return curId && curId === card._docId ? null : cur;
       });
     } catch (e) {
@@ -377,6 +537,11 @@ export default function BuilderClient({
       setPublishError("레이아웃 데이터가 올바르지 않습니다. (스텝 길이 불일치)");
       return;
     }
+    if (blockingIssues.length > 0) {
+      const first = blockingIssues[0]!;
+      setPublishError(`게시 불가: ${first.message}`);
+      return;
+    }
     for (let si = 0; si < steps.length; si++) {
       const step = steps[si];
       for (let bi = 0; bi < step.slots.length; bi++) {
@@ -394,16 +559,11 @@ export default function BuilderClient({
     setIsPublishing(true);
     setPublishError(null);
     try {
-      const stripMeta = (c: any) => {
-        const { _docId, createdAt, ...rest } = c as Record<string, unknown>;
-        return rest as unknown as CardData;
-      };
-
       // Firestore does NOT support nested arrays (array-of-array). Store steps as array-of-objects instead.
       const room_steps_v2: Array<{ rooms: CardData[] }> = steps.map((s) =>
         s.kind === "SINGLE"
-          ? { rooms: [stripMeta(s.slots[0]!)] }
-          : { rooms: [stripMeta(s.slots[0]!), stripMeta(s.slots[1]!)] },
+          ? { rooms: [stripCardClientMeta(s.slots[0]!)] }
+          : { rooms: [stripCardClientMeta(s.slots[0]!), stripCardClientMeta(s.slots[1]!)] },
       );
       const card_list = room_steps_v2.flatMap((s) => s.rooms);
 
@@ -411,8 +571,12 @@ export default function BuilderClient({
       const indicesByStep: number[][] = [];
       let idx = 0;
       for (const s of steps) {
-        if (s.kind === "SINGLE") indicesByStep.push([idx++]);
-        else indicesByStep.push([idx, idx + 1]), (idx += 2);
+        if (s.kind === "SINGLE") {
+          indicesByStep.push([idx++]);
+          continue;
+        }
+        indicesByStep.push([idx, idx + 1]);
+        idx += 2;
       }
       const room_links_v2: Array<
         | { kind: "END" }
@@ -433,7 +597,7 @@ export default function BuilderClient({
         for (const ri of indicesByStep[si]!) room_links_v2[ri] = nextLink;
       }
 
-      const payload = pruneUndefined({
+      const basePayload = pruneUndefined({
         schema_version: 2,
         creator_uid: uid,
         creator_nickname: nickname ?? "모험가",
@@ -445,16 +609,32 @@ export default function BuilderClient({
         room_steps_v2,
         card_list,
         room_links_v2,
-        likes: 0,
-        play_count: 0,
-        created_at: serverTimestamp(),
       });
-      await addDoc(collection(db, "dungeons"), payload);
-      setPublishOpen(false);
-      router.push("/explore");
+      if (editingDungeonId) {
+        await updateDoc(doc(db, "dungeons", editingDungeonId), {
+          ...(basePayload as Record<string, unknown>),
+          updated_at: serverTimestamp(),
+        });
+        setPublishOpen(false);
+        router.push("/my-dungeons");
+      } else {
+        const payload = pruneUndefined({
+          ...(basePayload as Record<string, unknown>),
+          likes: 0,
+          play_count: 0,
+          created_at: serverTimestamp(),
+        });
+        await addDoc(collection(db, "dungeons"), payload);
+        setPublishOpen(false);
+        router.push("/explore");
+      }
     } catch (e) {
       console.error(e);
-      setPublishError("게시 중 오류가 발생했습니다. 잠시 후 다시 시도하세요.");
+      setPublishError(
+        editingDungeonId
+          ? "저장 중 오류가 발생했습니다. 잠시 후 다시 시도하세요."
+          : "게시 중 오류가 발생했습니다. 잠시 후 다시 시도하세요.",
+      );
     } finally {
       setIsPublishing(false);
     }
@@ -466,7 +646,37 @@ export default function BuilderClient({
   );
   const requiredSlots = steps.reduce((acc, s) => acc + s.slots.length, 0);
   const forkCount = steps.reduce((acc, s) => acc + (s.kind === "FORK" ? 1 : 0), 0);
-  const canPublish = dungeonName.trim().length >= 2 && filledSlots === requiredSlots;
+  const analysis = useMemo(
+    () =>
+      analyzeDungeonForBuilder({
+        difficulty,
+        roomCount,
+        steps,
+        empirical: empiricalBalance,
+      }),
+    [difficulty, roomCount, steps, empiricalBalance],
+  );
+  const blockingIssues = analysis.issues.filter((it) => it.severity === "ERROR");
+  const warningIssues = analysis.issues.filter((it) => it.severity === "WARN");
+  const canPublish =
+    dungeonName.trim().length >= 2 &&
+    filledSlots === requiredSlots &&
+    blockingIssues.length === 0;
+  const predictedClearPercent = Math.round(analysis.summary.estimatedClearRate * 100);
+  const calibratedClearPercent = Math.round(analysis.summary.calibratedClearRate * 100);
+  const empiricalClearPercent =
+    analysis.summary.empiricalClearRate === null
+      ? null
+      : Math.round(analysis.summary.empiricalClearRate * 100);
+  const empiricalCombatWinPercent =
+    analysis.summary.empiricalCombatWinRate === null
+      ? null
+      : Math.round(analysis.summary.empiricalCombatWinRate * 100);
+  const hasEmpiricalRuns = analysis.summary.empiricalRuns > 0;
+  const shownClearPercent = hasEmpiricalRuns ? calibratedClearPercent : predictedClearPercent;
+  const runMinuteRange = `${analysis.summary.calibratedRunMinutesMin}~${analysis.summary.calibratedRunMinutesMax}분`;
+  const heuristicMinuteRange = `${analysis.summary.estimatedRunMinutesMin}~${analysis.summary.estimatedRunMinutesMax}분`;
+  const setupModalKey = `${setupMode}:${setupOpen ? "OPEN" : "CLOSED"}:${editingDungeonId ?? "NEW"}:${dungeonName}:${difficulty}:${roomCount}`;
 
   return (
     <div className="min-h-screen bg-background overflow-hidden font-sans flex flex-col">
@@ -486,7 +696,10 @@ export default function BuilderClient({
             <div className="text-xs text-gray-600">
               거쳐야 할 방 {roomCount} · 슬롯 {filledSlots} / {requiredSlots}
               {forkCount > 0 ? ` · 갈림길 ${forkCount} (+${forkCount})` : ""} ·{" "}
-              {difficulty}
+              {difficulty} · 완주율 {shownClearPercent}% · 예상 {runMinuteRange}
+              {hasEmpiricalRuns ? ` · 실측 ${analysis.summary.empiricalRuns}런` : ""}
+              {blockingIssues.length > 0 ? ` · 오류 ${blockingIssues.length}` : ""}
+              {warningIssues.length > 0 ? ` · 주의 ${warningIssues.length}` : ""}
             </div>
           </div>
         </div>
@@ -553,11 +766,17 @@ export default function BuilderClient({
                 ? "bg-primary/10 border border-primary/50 text-primary hover:bg-primary/20"
                 : "bg-gray-900 border border-gray-800 text-gray-600 cursor-not-allowed"
             }`}
-            title="게시하기"
+            title={
+              !canPublish && blockingIssues.length > 0
+                ? "검증 오류를 먼저 해결하세요"
+                : editingDungeonId
+                  ? "저장하기"
+                  : "게시하기"
+            }
           >
             <span className="inline-flex items-center gap-2">
               <FaSave />
-              <span className="hidden sm:inline">게시하기</span>
+              <span className="hidden sm:inline">{editingDungeonId ? "저장하기" : "게시하기"}</span>
             </span>
           </button>
         </div>
@@ -597,6 +816,21 @@ export default function BuilderClient({
           </button>
         </div>
       </nav>
+
+      {(editLoading || editLoadError) && (
+        <div className="border-b border-gray-800 bg-black/40 px-4 sm:px-6 py-3">
+          {editLoading && (
+            <div className="text-sm text-gray-400">
+              던전 편집 데이터를 불러오는 중입니다.
+            </div>
+          )}
+          {editLoadError && (
+            <div className="text-sm rounded border border-red-900 bg-red-900/10 text-red-300 px-3 py-2">
+              {editLoadError}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-hidden">
         {/* Mobile: tabbed views with smooth transitions */}
@@ -683,8 +917,69 @@ export default function BuilderClient({
                   </div>
                 )}
 
+                <div className="mb-4 border border-gray-800 bg-black/35 rounded-lg p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs text-gray-500 font-mono uppercase tracking-wider">
+                        자동 검증 리포트
+                      </div>
+                      <div className="text-sm text-gray-200 font-bold">
+                        {hasEmpiricalRuns ? "실측 보정 완주율" : "예상 완주율"} {shownClearPercent}% · 예상 플레이 {runMinuteRange}
+                      </div>
+                      <div className="mt-1 text-[11px] text-gray-600">
+                        휴리스틱 완주율 {predictedClearPercent}% · 휴리스틱 플레이 {heuristicMinuteRange}
+                      </div>
+                      {hasEmpiricalRuns && (
+                        <div className="mt-1 text-[11px] text-gray-600">
+                          실측 {analysis.summary.empiricalRuns}런
+                          {empiricalClearPercent !== null ? ` · 실측 완주율 ${empiricalClearPercent}%` : ""}
+                          {empiricalCombatWinPercent !== null ? ` · 실측 전투 승률 ${empiricalCombatWinPercent}%` : ""}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-xs text-right">
+                      <div className="text-red-300">오류 {blockingIssues.length}</div>
+                      <div className="text-yellow-200">주의 {warningIssues.length}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-black/30 border border-gray-800 rounded px-2 py-1 text-gray-400">
+                      평균 위험 <span className="text-gray-200">{analysis.summary.avgRisk}</span>
+                    </div>
+                    <div className="bg-black/30 border border-gray-800 rounded px-2 py-1 text-gray-400">
+                      최고 위험 <span className="text-gray-200">{analysis.summary.peakRisk}</span>
+                    </div>
+                    <div className="bg-black/30 border border-gray-800 rounded px-2 py-1 text-gray-400">
+                      전투 밀도 <span className="text-gray-200">{Math.round(analysis.summary.combatDensity * 100)}%</span>
+                    </div>
+                    <div className="bg-black/30 border border-gray-800 rounded px-2 py-1 text-gray-400">
+                      휴식 밀도 <span className="text-gray-200">{Math.round(analysis.summary.restDensity * 100)}%</span>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    {analysis.issues.slice(0, 3).map((it, idx) => (
+                      <div
+                        key={`${it.code}-${idx}`}
+                        className={`rounded border px-3 py-2 text-xs ${severityTone(it.severity)}`}
+                      >
+                        <div className="font-semibold">
+                          [{severityBadge(it.severity)}] {it.message}
+                        </div>
+                        {it.hint ? <div className="mt-1 opacity-90">{it.hint}</div> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 max-w-7xl mx-auto mb-10">
                   {steps.map((step, stepIndex) => {
+                    const stepRisk = clamp(
+                      Math.round(analysis.heatmapByStep[stepIndex] ?? 0),
+                      0,
+                      100,
+                    );
+                    const riskTone = heatClass(stepRisk);
+
                     const renderSlot = (slotIndex: 0 | 1, badge?: "1" | "2") => {
                       const card =
                         step.kind === "SINGLE"
@@ -743,6 +1038,11 @@ export default function BuilderClient({
                           transition={STEP_LAYOUT_TRANSITION}
                           className="relative"
                         >
+                          <div className="absolute top-1 right-1 z-10 px-2 py-0.5 rounded bg-black/70 border border-gray-800 text-[10px]">
+                            <span className={riskTone.text}>
+                              {riskTone.label} {stepRisk}
+                            </span>
+                          </div>
                           {renderSlot(0)}
                         </motion.div>
                       );
@@ -756,6 +1056,11 @@ export default function BuilderClient({
                         transition={STEP_LAYOUT_TRANSITION}
                         className="col-span-2 relative"
                       >
+                        <div className="absolute top-1 right-1 z-10 px-2 py-0.5 rounded bg-black/70 border border-gray-800 text-[10px]">
+                          <span className={riskTone.text}>
+                            {riskTone.label} {stepRisk}
+                          </span>
+                        </div>
                         <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-2 py-1 rounded-full bg-black/70 border border-gray-800 text-primary/90 text-xs flex items-center gap-1">
                           <FaCodeBranch />
                           <span className="font-mono">{stepIndex + 1}</span>
@@ -977,8 +1282,74 @@ export default function BuilderClient({
                 </div>
               )}
 
+              <div className="max-w-7xl mx-auto mb-4 border border-gray-800 bg-black/35 rounded-lg p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs text-gray-500 font-mono uppercase tracking-wider">
+                      자동 검증 리포트
+                    </div>
+                    <div className="text-sm text-gray-200 font-bold">
+                      {hasEmpiricalRuns ? "실측 보정 완주율" : "예상 완주율"} {shownClearPercent}% · 예상 플레이 {runMinuteRange}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      게시 전 난이도/리듬/회복구간을 자동으로 검사합니다.
+                    </div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      휴리스틱 완주율 {predictedClearPercent}% · 휴리스틱 플레이 {heuristicMinuteRange}
+                    </div>
+                    {hasEmpiricalRuns && (
+                      <div className="mt-1 text-xs text-gray-600">
+                        실측 {analysis.summary.empiricalRuns}런
+                        {empiricalClearPercent !== null ? ` · 실측 완주율 ${empiricalClearPercent}%` : ""}
+                        {empiricalCombatWinPercent !== null ? ` · 실측 전투 승률 ${empiricalCombatWinPercent}%` : ""}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-sm text-right">
+                    <div className="text-red-300">오류 {blockingIssues.length}</div>
+                    <div className="text-yellow-200">주의 {warningIssues.length}</div>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                  <div className="bg-black/30 border border-gray-800 rounded px-2 py-1 text-gray-400">
+                    평균 위험 <span className="text-gray-200">{analysis.summary.avgRisk}</span>
+                  </div>
+                  <div className="bg-black/30 border border-gray-800 rounded px-2 py-1 text-gray-400">
+                    최고 위험 <span className="text-gray-200">{analysis.summary.peakRisk}</span>
+                  </div>
+                  <div className="bg-black/30 border border-gray-800 rounded px-2 py-1 text-gray-400">
+                    전투 밀도 <span className="text-gray-200">{Math.round(analysis.summary.combatDensity * 100)}%</span>
+                  </div>
+                  <div className="bg-black/30 border border-gray-800 rounded px-2 py-1 text-gray-400">
+                    함정 밀도 <span className="text-gray-200">{Math.round(analysis.summary.trapDensity * 100)}%</span>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid md:grid-cols-2 gap-2">
+                  {analysis.issues.slice(0, 6).map((it, idx) => (
+                    <div
+                      key={`${it.code}-${idx}`}
+                      className={`rounded border px-3 py-2 text-xs ${severityTone(it.severity)}`}
+                    >
+                      <div className="font-semibold">
+                        [{severityBadge(it.severity)}] {it.message}
+                      </div>
+                      {it.hint ? <div className="mt-1 opacity-90">{it.hint}</div> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <div className="grid grid-cols-10 gap-3 max-w-7xl mx-auto mb-10">
                 {steps.map((step, stepIndex) => {
+                  const stepRisk = clamp(
+                    Math.round(analysis.heatmapByStep[stepIndex] ?? 0),
+                    0,
+                    100,
+                  );
+                  const riskTone = heatClass(stepRisk);
+
                   const renderSlot = (slotIndex: 0 | 1, badge?: "1" | "2") => {
                     const card =
                       step.kind === "SINGLE"
@@ -1039,6 +1410,11 @@ export default function BuilderClient({
                           transition={STEP_LAYOUT_TRANSITION}
                           className="relative"
                         >
+                          <div className="absolute top-1 right-1 z-10 px-2 py-0.5 rounded bg-black/70 border border-gray-800 text-[10px]">
+                            <span className={riskTone.text}>
+                              {riskTone.label} {stepRisk}
+                            </span>
+                          </div>
                           {renderSlot(0)}
                         </motion.div>
                       );
@@ -1052,6 +1428,11 @@ export default function BuilderClient({
                         transition={STEP_LAYOUT_TRANSITION}
                         className="col-span-2 relative"
                       >
+                        <div className="absolute top-1 right-1 z-10 px-2 py-0.5 rounded bg-black/70 border border-gray-800 text-[10px]">
+                          <span className={riskTone.text}>
+                            {riskTone.label} {stepRisk}
+                          </span>
+                        </div>
                         <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-2 py-1 rounded-full bg-black/70 border border-gray-800 text-primary/90 text-xs flex items-center gap-1">
                           <FaCodeBranch />
                           <span className="font-mono">{stepIndex + 1}</span>
@@ -1127,6 +1508,7 @@ export default function BuilderClient({
         slotCount={requiredSlots}
         difficulty={difficulty}
         onPublish={handlePublish}
+        mode={editingDungeonId ? "update" : "publish"}
         onEdit={() => {
           setSetupMode("edit");
           setSetupOpen(true);
@@ -1138,6 +1520,7 @@ export default function BuilderClient({
       />
 
       <DungeonSetupModal
+        key={setupModalKey}
         open={setupOpen}
         mode={setupMode}
         initial={{
